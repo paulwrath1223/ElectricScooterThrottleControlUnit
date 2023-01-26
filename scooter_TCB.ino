@@ -20,6 +20,7 @@
 
 bool calibrationMode = false;
 bool newConfigQueued = false;
+bool failedBootSanityCheck = false;
 
 int potentialNewThrottleUpper;
 int potentialNewThrottleLower;
@@ -50,20 +51,37 @@ void setup() {
 
   attachInterrupt(commitButtonPin, isr, FALLING);
 
-  currentThrottleUpper = read2bytes(throttleUpperEEPROMAddress);
-  currentThrottleLower = read2bytes(throttleLowerEEPROMAddress);
-  currentBrakeUpper = read2bytes(brakeUpperEEPROMAddress);
-  currentBrakeLower = read2bytes(brakeLowerEEPROMAddress);
+  potentialNewThrottleUpper = read2bytes(throttleUpperEEPROMAddress);
+  potentialNewThrottleLower = read2bytes(throttleLowerEEPROMAddress);
+  potentialNewBrakeUpper = read2bytes(brakeUpperEEPROMAddress);
+  potentialNewBrakeLower = read2bytes(brakeLowerEEPROMAddress);
   if serialPrintStatements{
-    Serial.print("currentThrottleUpper as read from EEPROM: ");
-    Serial.println(currentThrottleUpper);
-    Serial.print("currentThrottleLower as read from EEPROM: ");
-    Serial.println(currentThrottleLower);
-    Serial.print("currentBrakeUpper as read from EEPROM: ");
-    Serial.println(currentBrakeUpper);
-    Serial.print("currentBrakeLower as read from EEPROM: ");
-    Serial.println(currentBrakeLower);
+    Serial.print("potentialNewThrottleUpper as read from EEPROM: ");
+    Serial.println(potentialNewThrottleUpper);
+    Serial.print("potentialNewThrottleLower as read from EEPROM: ");
+    Serial.println(potentialNewThrottleLower);
+    Serial.print("potentialNewBrakeUpper as read from EEPROM: ");
+    Serial.println(potentialNewBrakeUpper);
+    Serial.print("potentialNewBrakeLower as read from EEPROM: ");
+    Serial.println(potentialNewBrakeLower);
   }
+  // sanity check on the loaded config
+  if bothInputsZero(){
+    if serialPrintStatements{
+      Serial.println("Sanity check passed, assigning potential limits to current inputs");
+    }
+    failedBootSanityCheck = false;
+    currentThrottleUpper = potentialNewThrottleUpper;
+    currentThrottleLower = potentialNewThrottleLower;
+    currentBrakeUpper = potentialNewBrakeUpper;
+    currentBrakeLower = potentialNewBrakeLower;
+  } else{
+    if serialPrintStatements{
+      Serial.println("Sanity check failed, raising flag");
+    }
+    failedBootSanityCheck = true;
+  }
+
 }
 
 void loop() {
@@ -104,23 +122,43 @@ void loop() {
     potentialNewBrakeUpper -= 100;
     potentialNewBrakeLower += 100;
 
+    if serialPrintStatements{
+      Serial.print("potentialNewThrottleUpper with deadzones: ");
+      Serial.println(potentialNewThrottleUpper);
+      Serial.print("potentialNewThrottleLower with deadzones: ");
+      Serial.println(potentialNewThrottleLower);
+      Serial.print("potentialNewBrakeUpper with deadzones: ");
+      Serial.println(potentialNewBrakeUpper);
+      Serial.print("potentialNewBrakeLower with deadzones: ");
+      Serial.println(potentialNewBrakeLower);
+    }
+
     if(((potentialNewThrottleUpper - potentialNewThrottleLower) > 200) && ((potentialNewBrakeUpper - potentialNewBrakeLower) > 200)){
       newConfigQueued = true;
+      if serialPrintStatements{
+        Serial.println("new limit check passed, flagged as valid");
+      }
     }
     calibrationMode = false;
-  } else{
+  } else if(!failedBootSanityCheck){
     output_to_esc(calculate_output(analogRead(throttleInPin), analogRead(brakeInPin)));
+  } else{
+    // if boot sanity check failed, basically just wait until user calibrates
+    delay(10);
+    output_to_esc(0);
   }
 }
 
-void IRAM_ATTR isr(){  // TODO: attach to commit pin interrupt
+void IRAM_ATTR isr(){  
   if(digitalRead(commitButtonPin)){
     if(!calibrationMode && newConfigQueued){
-      if bothInputsZero(){ //   TODO: make sure both inputs read 0
+      if bothInputsZero(){ //   make sure both inputs read 0
         currentThrottleUpper = potentialNewThrottleUpper;
         currentThrottleLower = potentialNewThrottleLower;
         currentBrakeUpper = potentialNewBrakeUpper;
         currentBrakeLower = potentialNewBrakeLower;
+
+        failedBootSanityCheck = false; // even though a new boot has not happened, recalibrating should override a failed boot sanity check
 
         write2bytes(throttleLowerEEPROMAddress, currentThrottleLower);
         write2bytes(throttleUpperEEPROMAddress, currentThrottleUpper);
